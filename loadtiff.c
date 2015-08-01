@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <math.h>
 
 #define TAG_BYTE 1
@@ -395,8 +396,12 @@ typedef struct
 	int endianness;
 } BSTREAM;
 
+#ifndef BIG_ENDIAN
 #define BIG_ENDIAN 1
+#endif
+#ifndef LITTLE_ENDIAN
 #define LITTLE_ENDIAN 2
+#endif
 
 static void header_defaults(BASICHEADER *header);
 static void freeheader(BASICHEADER *header);
@@ -1759,7 +1764,7 @@ static unsigned char *decompress(FILE *fp, unsigned long count, int compression,
 		if (!buff)
 			goto out_of_memory;
 		fread(buff, 1, count, fp);
-		if (T4options & 0x04 == 0)
+		if ((T4options & 0x04) == 0)
 			answer = ccittdecompress(buff, count, Nret, width, height, 1);
 		else
 			answer = 0; /* not handling for now */
@@ -2117,7 +2122,8 @@ static struct ccittcode ccitttable[105] =
 	{ 60, "01001011", 60, "000000101100" },
 	{ 61, "00110010", 61, "000001011010" },
 	{ 62, "00110011", 62, "000001100110" },
-	{ 63, "00110100", 63, "000001100111" },	{ 64, "11011", 64, "0000001111" },
+	{ 63, "00110100", 63, "000001100111" },
+	{ 64, "11011", 64, "0000001111" },
 	{ 128, "10010", 128, "000011001000" },
 	{ 192, "010111", 192, "000011001001" },
 	{ 256, "0110111", 256, "000001011011" },
