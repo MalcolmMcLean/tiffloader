@@ -663,7 +663,7 @@ static int header_not_ok(BASICHEADER *header)
 	/*  Palette files */
 	//header->colormap = 0;
 	//header->Ncolormap = 0;
-	if (header->Ncolormap < 0 || header->Ncolormap > SIZE_MAX / 4)
+	if (header->Ncolormap < 0 || header->Ncolormap > INT_MAX / 4)
 		goto parse_error;
 	/* RGB */
 	//header->planarconfiguration = 1;
