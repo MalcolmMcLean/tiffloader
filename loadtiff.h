@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+
 /*
   By Malcolm McLean
 
@@ -18,11 +19,16 @@
   
   if(rgba == 0)
      printf("TIFF file unreadable\n");
-  /* 
+   
      rgba is a red, green, blue, alpha 32 bit buffer,
      width is image width, height is image height in pixels
   */
 
-unsigned char *floadtiff(FILE *fp, int *width, int *height);
+#define FMT_ERROR 0
+#define FMT_RGBA 1
+#define FMT_CMYK 2
+#define FMT_GREY 3
+
+unsigned char *floadtiff(FILE *fp, int *width, int *height, int *format);
 
 #endif
