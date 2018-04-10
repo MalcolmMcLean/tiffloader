@@ -25,9 +25,11 @@
   */
 
 #define FMT_ERROR 0
-#define FMT_RGBA 1
+#define FMT_RGB 1
 #define FMT_CMYK 2
 #define FMT_GREY 3
+
+
 
 unsigned char *floadtiff(FILE *fp, int *width, int *height, int *format);
 
