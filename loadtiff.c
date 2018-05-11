@@ -2,7 +2,7 @@
   TIFF loader, by Malcolm McLean
 
   Meant to be a pretty comprehensive, one file, portable TIFF reader
-  We just read everything in as 8 bit RGB, Greryscale, or CMYK.
+  We just read everything in as 8 bit RGBs.
 
   Current limitations - no JPEG, no alpha, a few odd formats still
     unsupported
@@ -10,7 +10,6 @@
 
   Free for public use
   Acknowlegements, Lode Vandevenne for the Zlib decompressor
-  Development support from Astute Graphics - astutegraphics.com
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,10 +17,7 @@
 #include <limits.h>
 #include <math.h>
 
-#define FMT_ERROR 0
-#define FMT_RGB 1
-#define FMT_CMYK 2
-#define FMT_GREY 3
+#include "loadtiff.h"
 
 #define TAG_BYTE 1
 #define TAG_ASCII 2
@@ -417,9 +413,6 @@ static void freeheader(BASICHEADER *header);
 static int header_fixupsections(BASICHEADER *header);
 static int header_not_ok(BASICHEADER *header);
 static int fillheader(BASICHEADER *header, TAG *tags, int Ntags);
-static int header_Noutsamples(BASICHEADER *header);
-static int header_Ninsamples(BASICHEADER *header);
-static int header_outputformat(BASICHEADER *header);
 
 static unsigned char *decompress(FILE *fp, unsigned long count, int compression, unsigned long *Nret, int width, int height, unsigned long T4options );
 static void header_defaults(BASICHEADER *header);
@@ -457,6 +450,84 @@ static double memreadieee754(unsigned char *buff, int bigendian);
 static float memreadieee754f(unsigned char*buff, int bigendian);
 static int YcbcrToRGB(int Y, int cb, int cr, unsigned char *red, unsigned char *green, unsigned char *blue);
 
+/*
+   load a tiff, setting the background to white
+    Params: fp - pointer to a TIFF file open for reading
+            width - return for image width
+            height - return for image height;
+            format - return for image format
+    Returns: the raster data, 0 on error    
+ */
+unsigned char *floadtiffwhite(FILE *fp, int *width, int *height, int *format)
+{
+  int fmt;
+  unsigned char *buff = 0;
+  unsigned char *rgb = 0;
+  unsigned char *grey = 0;
+  unsigned char *cmyk = 0;
+  long i;
+
+
+  buff = floadtiff(fp, width, height, &fmt);
+  if(!buff)
+    goto error_exit;
+  switch(fmt)
+  {
+  case FMT_RGBA:
+    rgb = malloc(3 * *width * *height);
+    if(!rgb)
+      goto error_exit;
+    for(i=0;i< *width * *height;i++)
+    {
+      rgb[i*3] = buff[i*4] + 255 - buff[i*4+3];
+      rgb[i*3+1] = buff[i*4+1] + 255 - buff[i*4+3];
+      rgb[i*3+2] = buff[i*4+2] + 255 - buff[i*4+3]; 
+    }
+    *format = FMT_RGB;
+    free(buff);
+    return rgb;
+
+  case FMT_CMYK:
+    *format = FMT_CMYK;
+    return buff;
+
+  case FMT_CMYKA:
+    cmyk = malloc(4 * *width* *height);
+    for(i=0;i< *width * *height; i++)
+    {
+      cmyk[i*4] = buff[i*5];
+      cmyk[i*4+1] = buff[i*5+1];
+      cmyk[i*4+2] = buff[i*5+2];
+      cmyk[i*4+3] = buff[i*5+3];
+    }
+    *format = FMT_CMYK;
+    free(buff);
+    return cmyk;
+
+  case FMT_GREYALPHA:
+    grey = malloc(* width * * height);
+    for(i=0;i < *width * *height; i++)
+    {
+      grey[i] = buff[i*2] + 255 - buff[i*2+1];
+    }
+    *format = FMT_GREY;
+    free(buff);
+    return grey;
+  default: goto error_exit;
+  }
+  
+ error_exit:
+  free(buff);
+  free(rgb);
+  free(grey);
+  free(cmyk);
+  *format = FMT_ERROR;
+  *width = -1;
+  *height = -1;
+  return 0;
+
+
+}
 unsigned char *floadtiff(FILE *fp, int *width, int *height, int *format)
 {
 	int enda, endb;
@@ -466,7 +537,7 @@ unsigned char *floadtiff(FILE *fp, int *width, int *height, int *format)
 	TAG *tags = 0;
 	int Ntags = 0;
 	int err;
-	BASICHEADER header;
+	BASICHEADER header = {0};
 	unsigned char *answer;
 
         *format = FMT_ERROR;
@@ -488,24 +559,25 @@ unsigned char *floadtiff(FILE *fp, int *width, int *height, int *format)
 	offset = fget32(type, fp);
 	fseek(fp, offset, SEEK_SET);
 
+	//printf("%c%c %d %ld\n", enda, endb, magic, offset);
+
 	tags = floadheader(type, fp, &Ntags);
 	if (!tags)
 		goto out_of_memory;
-	
+	//getchar();
 	header_defaults(&header);
 	header.endianness = type;
 	fillheader(&header, tags, Ntags);
 	err = header_fixupsections(&header);
 	if (err)
 		goto parse_error;
-       
+	//printf("here %d %d\n", header.imagewidth, header.imageheight);
+	//printf("Bitspersample%d %d %d\n", header.bitspersample[0], header.bitspersample[1], header.bitspersample[2]);
 	err = header_not_ok(&header);
 	if (err)
 		goto parse_error;
 	answer = loadraster(&header, fp, format);
-        if(!answer)
-	  goto out_of_memory;
-       
+	//getchar();
 	*width = header.imagewidth;
 	*height = header.imageheight;
 	freeheader(&header);
@@ -884,18 +956,25 @@ static int header_Noutsamples(BASICHEADER *header)
 	{
 	case PI_BlackIsZero:
         case PI_WhiteIsZero:
-	  return 1;
+	  return 2;
         case PI_CMYK:
+          if(header->extrasamples == 1)
+	  {
+             return 5;
+	  }
+          else
+	  {
 	    return 4;
+	  }
           break;
         case PI_RGB:
-	  return 3;
+	  return 4;
         case PI_RGB_Palette:
 	  return 4;
         case PI_YCbCr:
-          return 3;
+          return 4;
         default:
-	  return 3;
+	  return 4;
 	}
   
 }
@@ -907,17 +986,17 @@ static int header_Ninsamples(BASICHEADER *header)
     {
         case PI_BlackIsZero:
         case PI_WhiteIsZero:
-            return 1;
+            return 1 + ((header->extrasamples == 1) ? 1 : 0);
         case PI_CMYK:
-            return 4;
+            return 4 + ((header->extrasamples == 1) ? 1 : 0);
         case PI_RGB:
-            return 3;
+            return 3 + ((header->extrasamples == 1) ? 1 : 0);
         case PI_RGB_Palette:
-            return 3;
+            return 4;
         case PI_YCbCr:
-            return 3;
+            return 4;
         default:
-            return 3;
+            return 4;
     }
     
 }
@@ -930,21 +1009,30 @@ static int header_outputformat(BASICHEADER *header)
 	{
 	case PI_BlackIsZero:
         case PI_WhiteIsZero:
-	  return FMT_GREY;
+	  return FMT_GREYALPHA;
         case PI_CMYK:
+          if(header->extrasamples == 1)
+	  {
+             return FMT_CMYKA;
+	  }
+          else
+	  {
 	    return FMT_CMYK;
+	  }
           break;
         case PI_RGB:
-	  return FMT_RGB;
+	  return FMT_RGBA;
         case PI_RGB_Palette:
-	  return FMT_RGB;
+	  return FMT_RGBA;
         case PI_YCbCr:
-          return FMT_RGB;
+          return FMT_RGBA;
         default:
-	  return FMT_RGB;
+	  return FMT_RGBA;
 	}
 
 }
+
+
 
 static unsigned char *loadraster(BASICHEADER *header, FILE *fp, int *format)
 {
@@ -968,6 +1056,10 @@ static unsigned char *loadraster(BASICHEADER *header, FILE *fp, int *format)
 	if (!answer)
 		goto out_of_memory;
 
+        for(ii=0;ii<header->imagewidth * header->imageheight;ii++)
+	{
+	  answer[ii*outsamples+outsamples-1] = 255;
+	}
 	if (header->tilewidth)
 		tilesacross = (header->imagewidth + header->tilewidth - 1) / header->tilewidth;
 
@@ -1091,11 +1183,11 @@ parse_error:
 
 static int planetochannel(unsigned char *out, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header, int sample_index);
 
-static int greytogrey(unsigned char *grey, int width, int height, unsigned char *bits, unsigned long N, BASICHEADER *header, int insamples);
-static int paltorgb(unsigned char *rgb, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header);
-static int ycbcrtorgb(unsigned char *rgb, int width, int height, unsigned char *bits, unsigned long N, BASICHEADER *header);
+static int greytogrey(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long N, BASICHEADER *header, int insamples);
+static int paltorgba(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header);
+static int ycbcrtorgba(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long N, BASICHEADER *header);
 static int cmyktocmyk(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header, int insamples);
-static int bitstreamtorgb(unsigned char *rgb, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header, int insamples);
+static int bitstreamtorgba(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header, int insamples);
 
 
 static void unpredictsamples(unsigned char *buff, int width, int height, int depth, BASICHEADER *header);
@@ -1133,20 +1225,20 @@ static unsigned char *readtile(BASICHEADER *header, int index, int *tile_width, 
 		}
 		break;
 	case PI_RGB:
-		bitstreamtorgb(answer, header->tilewidth, header->tileheight, data, N, header, *insamples);
+		bitstreamtorgba(answer, header->tilewidth, header->tileheight, data, N, header, *insamples);
 		if (header->predictor == 2)
 		{
 			unpredictsamples(answer, header->tilewidth, *insamples, header->tileheight, header);
 		}
 		break;
 	case PI_RGB_Palette:
-		paltorgb(answer, header->tilewidth, header->tileheight, data, N, header);
+		paltorgba(answer, header->tilewidth, header->tileheight, data, N, header);
 		break;
 	case PI_CMYK:
 		cmyktocmyk(answer, header->tilewidth, header->tileheight, data, N, header, *insamples);
 		break;
 	case PI_YCbCr:
-		ycbcrtorgb(answer, header->tilewidth, header->tileheight, data, N, header);
+		ycbcrtorgba(answer, header->tilewidth, header->tileheight, data, N, header);
 		break;
 	}
 	
@@ -1196,20 +1288,20 @@ static unsigned char *readstrip(BASICHEADER *header, int index, int *strip_width
 		}
 		break;
 	case PI_RGB:
-		bitstreamtorgb(answer, header->imagewidth, stripheight, data, N, header, *insamples);
+		bitstreamtorgba(answer, header->imagewidth, stripheight, data, N, header, *insamples);
 		if (header->predictor == 2)
 		{
 			unpredictsamples(answer, header->imagewidth, stripheight, *insamples, header);
 		}
 		break;
 	case PI_RGB_Palette:
-		paltorgb(answer, header->imagewidth, stripheight, data, N, header);
+		paltorgba(answer, header->imagewidth, stripheight, data, N, header);
 		break;
 	case PI_CMYK:
 		cmyktocmyk(answer, header->imagewidth, stripheight, data, N, header, *insamples);
 		break;
 	case PI_YCbCr:
-		ycbcrtorgb(answer, header->imagewidth, stripheight, data, N, header);
+		ycbcrtorgba(answer, header->imagewidth, stripheight, data, N, header);
 		break;
 	}
 	
@@ -1335,7 +1427,14 @@ static int greytogrey(unsigned char *grey, int width, int height, unsigned char 
 				grey[0] = 255 - grey[0];
 			bits += header->bitspersample[0] / 8;
 			i += header->bitspersample[0] / 8;
-		     
+			
+            if(insamples == 2 && header->samplesperpixel > 1)
+            {
+                grey[1] = readbytesample(bits, header, 0);
+                bits += header->bitspersample[1] / 8;
+                i += header->bitspersample[1] / 8;
+            }
+            
 			for (ii = insamples; ii < header->samplesperpixel; ii++)
 			{
 				bits += header->bitspersample[ii] / 8;
@@ -1359,7 +1458,11 @@ static int greytogrey(unsigned char *grey, int width, int height, unsigned char 
 			{
 				int val = getbits(bs, header->bitspersample[0]);
 				grey[0] = (val * 255) / ((1 << (header->bitspersample[0])) -1);
-			
+				if(insamples == 2 && header->samplesperpixel > 1 )
+                {
+                    val = getbits(bs, header->bitspersample[1]);
+                    grey[1] = (val * 255) / ((1 << (header->bitspersample[1])) -1);
+                }
 				for (iii = insamples; iii < header->samplesperpixel; iii++)
 				{
 					getbits(bs, header->bitspersample[iii]);
@@ -1368,14 +1471,13 @@ static int greytogrey(unsigned char *grey, int width, int height, unsigned char 
 			}
 			synchtobyte(bs);
 		}
-		killbstream(bs);
 
 		return 0;
 	}
 	
 }
 
-static int paltorgb(unsigned char *rgb, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header)
+static int paltorgba(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header)
 {
 	unsigned long i;
 	unsigned long counter = 0;
@@ -1403,9 +1505,9 @@ static int paltorgb(unsigned char *rgb, int width, int height, unsigned char *bi
 
 			if (index >= 0 && index < header->Ncolormap)
 			{
-				rgb[0] = header->colormap[index * 3];
-				rgb[1] = header->colormap[index * 3 + 1];
-				rgb[2] = header->colormap[index * 3 + 2];
+				rgba[0] = header->colormap[index * 3];
+				rgba[1] = header->colormap[index * 3 + 1];
+				rgba[2] = header->colormap[index * 3 + 2];
 			}
 
 			for (ii = 1; ii < header->samplesperpixel; ii++)
@@ -1413,7 +1515,7 @@ static int paltorgb(unsigned char *rgb, int width, int height, unsigned char *bi
 				bits += header->bitspersample[ii] / 8;
 				i += header->bitspersample[ii] / 8;
 			}
-			rgb += 3;
+			rgba += 4;
 			counter++;
 			if (counter > (unsigned long) (width * height) )
 			{
@@ -1433,15 +1535,15 @@ static int paltorgb(unsigned char *rgb, int width, int height, unsigned char *bi
 				index = getbits(bs, header->bitspersample[0]);
 				if (index >= 0 && index < header->Ncolormap)
 				{
-					rgb[0] = header->colormap[index * 3];
-					rgb[1] = header->colormap[index * 3 + 1];
-				    rgb[2] = header->colormap[index * 3 + 2];
+					rgba[0] = header->colormap[index * 3];
+					rgba[1] = header->colormap[index * 3 + 1];
+				    rgba[2] = header->colormap[index * 3 + 2];
 				}
 				for (iii = 1; iii < header->samplesperpixel; iii++)
 				{
 					getbits(bs, header->bitspersample[iii]);
 				}
-				rgb += 3;
+				rgba += 4;
 			}
 			synchtobyte(bs);
 		}
@@ -1454,7 +1556,7 @@ static int paltorgb(unsigned char *rgb, int width, int height, unsigned char *bi
 	return -1;
 }
 
-static int ycbcrtorgb(unsigned char *rgb, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header)
+static int ycbcrtorgba(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header)
 {
 	unsigned long i;
 	int ii;
@@ -1515,9 +1617,9 @@ static int ycbcrtorgb(unsigned char *rgb, int width, int height, unsigned char *
 				//YcbcrToRGB(Y[ii], Cb, Cr, &r, &g, &b);
 				if (ix < width && iy < height)
 				{
-					rgb[(iy * width + ix) * 3] = red;
-					rgb[(iy * width + ix) * 3 + 1] = green;
-					rgb[(iy * width + ix) * 3 + 2] = blue;
+					rgba[(iy * width + ix) * 4] = red;
+					rgba[(iy * width + ix) * 4 + 1] = green;
+					rgba[(iy * width + ix) * 4 + 2] = blue;
 				}
 
 			}
@@ -1547,7 +1649,7 @@ static int cmyktocmyk(unsigned char *cmyk, int width, int height, unsigned char 
 	int ii;
 	int totbits = 0;
 	int bitstreamflag = 0;
-	int C, M, Y, K;
+	int C, M, Y, K, A;
     int Cprev = 0, Yprev = 0, Mprev = 0, Kprev = 0, Aprev = 0;
 	int red, green, blue;
 	int x, y;
@@ -1580,6 +1682,13 @@ static int cmyktocmyk(unsigned char *cmyk, int width, int height, unsigned char 
 			K = readbytesample(bits, header, 3);
 			bits += header->bitspersample[3] / 8;
 			i += header->bitspersample[3] / 8;
+            
+            if(insamples == 5)
+            {
+                A = readbytesample(bits, header, 4);
+                bits += header->bitspersample[4]/8;
+                i += header->bitspersample[4] / 8;
+            }
 			
 			if (header->predictor == 2)
 			{
@@ -1587,12 +1696,12 @@ static int cmyktocmyk(unsigned char *cmyk, int width, int height, unsigned char 
 				M = (M + Mprev) & 0xFF;
 				Y = (Y + Yprev) & 0xFF;
 				K = (K + Kprev) & 0xFF;
-           
+                A = (A + Aprev) & 0xFF;
 				Cprev = C;
 				Mprev = M;
 				Yprev = Y;
 				Kprev = K;
-               
+                Aprev = A;
 			}
 				
 			//red = (255 * (255 - C) * (255 - K))/(255 * 255);
@@ -1607,7 +1716,8 @@ static int cmyktocmyk(unsigned char *cmyk, int width, int height, unsigned char 
             cmyk[1] = M;
             cmyk[2] = Y;
             cmyk[3] = K;
-         
+            if(insamples == 5)
+                cmyk[4] = A;
 		    cmyk += insamples;
 			
 			for (ii = insamples; ii < header->samplesperpixel; ii++)
@@ -1646,7 +1756,7 @@ parse_error:
 /*
   
 */
-static int bitstreamtorgb(unsigned char *rgb, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header, int insamples)
+static int bitstreamtorgba(unsigned char *rgba, int width, int height, unsigned char *bits, unsigned long Nbytes, BASICHEADER *header, int insamples)
 {
 	unsigned long i;
 	int ii, iii;
@@ -1668,18 +1778,27 @@ static int bitstreamtorgb(unsigned char *rgb, int width, int height, unsigned ch
 
 		while (i < Nbytes -totbits/8 +1)
 		{
-			rgb[0] = readbytesample(bits, header, 0);
+			rgba[0] = readbytesample(bits, header, 0);
 			bits += header->bitspersample[0] / 8;
 			i += header->bitspersample[0] / 8;
-			rgb[1] = readbytesample(bits, header, 1);
+			rgba[1] = readbytesample(bits, header, 1);
 			bits += header->bitspersample[1] / 8;
 			i += header->bitspersample[1] / 8;
-			rgb[2] = readbytesample(bits, header, 2);
+			rgba[2] = readbytesample(bits, header, 2);
 			bits += header->bitspersample[2] / 8;
 			i += header->bitspersample[2] / 8;
 
+            if(insamples == 4)
+			{
+			  rgba[3] = readbytesample(bits, header, 3);
+		          bits += header->bitspersample[3]/8;
+                          i+=header->bitspersample[3]/8;
+                          lastsample = 4;
+			}
+            else
+            {
                 lastsample = 3;
-            
+            }
             
 
 			for (ii = lastsample; ii < header->samplesperpixel; ii++)
@@ -1687,7 +1806,7 @@ static int bitstreamtorgb(unsigned char *rgb, int width, int height, unsigned ch
 				bits += header->bitspersample[ii] / 8;
 				i += header->bitspersample[ii] / 8;
 			}
-			rgb += insamples;
+			rgba += insamples;
 		}
 
 		return 0;
@@ -1705,14 +1824,20 @@ static int bitstreamtorgb(unsigned char *rgb, int width, int height, unsigned ch
 				green = (green * 255) / ((1 << (header->bitspersample[1])) - 1);
 				blue = getbits(bs, header->bitspersample[2]);
 				blue = (blue * 255) / ((1 << (header->bitspersample[2])) - 1);
-				rgb[0] = red;
-				rgb[1] = green;
-				rgb[2] = blue;
+				rgba[0] = red;
+				rgba[1] = green;
+				rgba[2] = blue;
+                if(insamples == 4)
+                {
+                    alpha = getbits(bs, header->bitspersample[3]);
+                    alpha = (alpha * 255) / ((1 << (header->bitspersample[3])) - 1);
+                    rgba[3] = alpha;
+                }
 				for (iii = insamples; iii < header->samplesperpixel; iii++)
 				{
 					getbits(bs, header->bitspersample[iii]);
 				}
-				rgb += insamples;
+				rgba += insamples;
 			}
 			synchtobyte(bs);
 		}
@@ -2631,7 +2756,7 @@ static int loadlzw(unsigned char *out, FILE *fp, unsigned long count, unsigned l
 	int codelen;
 	unsigned char *stream = 0;
 	int blen = 0;
-	BSTREAM *bs = 0;
+	BSTREAM *bs;
 	ENTRY *table;
 	int pos = 0;
 	int ii;
@@ -2762,7 +2887,6 @@ static int loadlzw(unsigned char *out, FILE *fp, unsigned long count, unsigned l
 	}
 
 
-        killbstream(bs);
 	free(table);
 	free(stream);
 
@@ -2770,7 +2894,6 @@ static int loadlzw(unsigned char *out, FILE *fp, unsigned long count, unsigned l
 
 	return 0;
 parse_error:
-        killbstream(bs);
 	free(table);
 	free(stream);
 	return -1;

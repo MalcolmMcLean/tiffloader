@@ -10,37 +10,29 @@
 
   To use
   int width, height;
-  unsigned char *buff;
-  int format;
-
+  unsigned char *rgba;
   FILE *fp = fopen("tiffile.tiff", "rb");
   if(!fp)
      errorhandling();
-  buff = floadtiff(fp, &width, &height, &format);
+  rgba = floadtiff(fp, &width, &height);
   fclose(fp);
   
-  if(buff == 0)
+  if(rgba == 0)
      printf("TIFF file unreadable\n");
-
-  switch(format)
-  {
-     case FMT_ERROR: internal error;
-     case FMT_GREY: buff is 8 bit greyscale
-     case FMT_CMYK: buff is 32 bit CMYK values
-     case FMT_RGB: buff is 24 bit RGB values
-  }
    
+     rgba is a red, green, blue, alpha 32 bit buffer,
      width is image width, height is image height in pixels
-     format is the image format
   */
 
 #define FMT_ERROR 0
-#define FMT_RGB 1
+#define FMT_RGBA 1
 #define FMT_CMYK 2
-#define FMT_GREY 3
+#define FMT_CMYKA 3
+#define FMT_GREYALPHA 4
+#define FMT_RGB 5
+#define FMT_GREY 6
 
-
-
+unsigned char *floadtiffwhite(FILE *fp, int *width, int *height, int *format);
 unsigned char *floadtiff(FILE *fp, int *width, int *height, int *format);
 
 #endif
