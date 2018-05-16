@@ -1391,6 +1391,7 @@ static int planetochannel(unsigned char *out, int width, int height, unsigned ch
 			{
 				val = getbits(bs, header->bitspersample[sample_index]);
 				val = (val * 255) / ((1 << header->bitspersample[sample_index]) - 1);
+			       
 				*out++ = val;
 			}
 			synchtobyte(bs);
@@ -1458,6 +1459,8 @@ static int greytogrey(unsigned char *grey, int width, int height, unsigned char 
 			{
 				int val = getbits(bs, header->bitspersample[0]);
 				grey[0] = (val * 255) / ((1 << (header->bitspersample[0])) -1);
+				if(header->photometricinterpretation == PI_WhiteIsZero)
+				  grey[0] = 255 - grey[0];
 				if(insamples == 2 && header->samplesperpixel > 1 )
                 {
                     val = getbits(bs, header->bitspersample[1]);
