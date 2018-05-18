@@ -10,17 +10,22 @@
 
   To use
   int width, height;
-  unsigned char *rgba;
+  unsigned char *data;
+  int format;
+
   FILE *fp = fopen("tiffile.tiff", "rb");
   if(!fp)
      errorhandling();
-  rgba = floadtiff(fp, &width, &height);
+  data = floadtiff(fp, &width, &height, &format);
   fclose(fp);
   
-  if(rgba == 0)
+  if(data == 0)
      printf("TIFF file unreadable\n");
    
-     rgba is a red, green, blue, alpha 32 bit buffer,
+     data format given by format - it's 8 bit channels
+       with alpha (if any) last.
+     alpha is premultiplied = composted on black. To get
+        the image composted on white, call floadtiffwhite() 
      width is image width, height is image height in pixels
   */
 
